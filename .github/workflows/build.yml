@@ -12,7 +12,8 @@
 #        iOS      signed IPA        (needs the IOS_* secrets + APPLE_TEAM_ID)
 #
 # Settings → Secrets and variables → Actions
-#   Variables : EXPO_PUBLIC_API_URL, EXPO_PUBLIC_WEB_URL, APPLE_TEAM_ID
+#   Variables : EXPO_PUBLIC_API_URL, EXPO_PUBLIC_WEB_URL, APPLE_TEAM_ID,
+#               APP_BUNDLE_ID (optional, default com.seereon.edureon)
 #   Secrets   : ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
 #               ANDROID_KEY_PASSWORD, GOOGLE_SERVICES_JSON (optional, enables push),
 #               IOS_CERTIFICATE_P12_BASE64, IOS_CERTIFICATE_PASSWORD,
@@ -51,6 +52,7 @@ env:
   NODE_VERSION: "22"
   EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
   EXPO_PUBLIC_WEB_URL: ${{ vars.EXPO_PUBLIC_WEB_URL }}
+  APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
   APP_VERSION: ${{ github.event.inputs.version_name || '1.0.0' }}
   APP_BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
   STORE_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.store_build == 'true' }}
