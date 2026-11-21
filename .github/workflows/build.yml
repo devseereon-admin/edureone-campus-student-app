@@ -1,0 +1,245 @@
+# =============================================================================
+# Edureone Campus student app (React Native / Expo) — Android + iOS builds.
+#
+# Runs entirely inside THIS repository. It does not touch the web frontend
+# repo, its Capacitor "Mobile release" workflow, or any server.
+#
+#   push to main / pull request : verification builds
+#        Android  release APK (debug-signed unless the upload key is set)
+#        iOS      Release build for the simulator + an unsigned device build
+#   Actions → "Build apps" → Run workflow : store builds
+#        Android  signed AAB + APK  (needs the ANDROID_* secrets)
+#        iOS      signed IPA        (needs the IOS_* secrets + APPLE_TEAM_ID)
+#
+# Settings → Secrets and variables → Actions
+#   Variables : EXPO_PUBLIC_API_URL, EXPO_PUBLIC_WEB_URL, APPLE_TEAM_ID
+#   Secrets   : ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+#               ANDROID_KEY_PASSWORD, GOOGLE_SERVICES_JSON (optional, enables push),
+#               IOS_CERTIFICATE_P12_BASE64, IOS_CERTIFICATE_PASSWORD,
+#               IOS_PROVISIONING_PROFILE_BASE64
+#   The same values as the web repo's Mobile release workflow can be reused.
+# =============================================================================
+name: Build apps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Store version (e.g. 1.1.0)"
+        required: true
+        default: "1.0.0"
+      build_number:
+        description: "Android versionCode / iOS build number (higher than any build already uploaded, including the Capacitor app's)"
+        required: true
+        default: "100"
+      store_build:
+        description: "Sign for the stores (fails if signing secrets are missing)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+  EXPO_PUBLIC_WEB_URL: ${{ vars.EXPO_PUBLIC_WEB_URL }}
+  APP_VERSION: ${{ github.event.inputs.version_name || '1.0.0' }}
+  APP_BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+  STORE_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.store_build == 'true' }}
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  checks:
+    name: Typecheck + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint src app.config.ts plugins
+
+  android:
+    name: Android
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+
+      - name: Firebase config (optional, enables push)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
+            echo "GOOGLE_SERVICES_FILE=./google-services.json" >> "$GITHUB_ENV"
+          else
+            echo "::notice::GOOGLE_SERVICES_JSON not set: building without FCM push."
+          fi
+
+      - name: Upload key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            {
+              echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks"
+              echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+              echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+              echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          elif [ "$STORE_BUILD" = "true" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing; a store build must be signed with your upload key."
+            exit 1
+          else
+            echo "::notice::No upload key: this verification APK is debug-signed (do not upload it)."
+          fi
+          [ "$STORE_BUILD" = "true" ] && echo "REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV" || true
+
+      - name: Generate native project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Gradle release build
+        working-directory: android
+        env:
+          NODE_ENV: production
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Collect outputs
+        run: |
+          V="$APP_VERSION-$APP_BUILD_NUMBER"
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/edureone-campus-$V.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "out/edureone-campus-$V.aab"
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ env.APP_VERSION }}-${{ env.APP_BUILD_NUMBER }}
+          path: out/*
+          if-no-files-found: error
+
+  ios:
+    name: iOS
+    needs: checks
+    runs-on: macos-15
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
+      - run: npm ci
+
+      - name: Generate native project + CocoaPods
+        run: |
+          npx expo prebuild --platform ios --no-install --clean
+          cd ios && pod install
+
+      - name: Release build (simulator)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus \
+            -configuration Release -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$RUNNER_TEMP/dd-sim" \
+            CODE_SIGNING_ALLOWED=NO build | tail -n 60
+
+      - name: Release build (device, unsigned)
+        if: ${{ env.STORE_BUILD != 'true' }}
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus \
+            -configuration Release -sdk iphoneos -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/dd-device" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tail -n 60
+
+      - name: Package simulator app
+        run: |
+          APP=$(find "$RUNNER_TEMP/dd-sim/Build/Products/Release-iphonesimulator" -maxdepth 1 -name "*.app" | head -1)
+          mkdir -p out && ditto -c -k --keepParent "$APP" "out/EdureoneCampus-simulator-$APP_VERSION-$APP_BUILD_NUMBER.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-${{ env.APP_VERSION }}-${{ env.APP_BUILD_NUMBER }}
+          path: out/*.zip
+
+      # ---- Signed App Store build (manual runs with store_build) -------------
+      - name: Import signing certificate + profile
+        if: ${{ env.STORE_BUILD == 'true' }}
+        env:
+          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          if [ -z "$P12_BASE64" ] || [ -z "$PROFILE_BASE64" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::IOS_CERTIFICATE_P12_BASE64, IOS_PROVISIONING_PROFILE_BASE64 and the APPLE_TEAM_ID variable are required for a store build."
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"; KEYCHAIN_PW="$(uuidgen)"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")")
+          cp "$RUNNER_TEMP/profile.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+
+      - name: Archive + export IPA
+        if: ${{ env.STORE_BUILD == 'true' }}
+        working-directory: ios
+        run: |
+          set -o pipefail
+          BUNDLE_ID=$(node -p "require('../node_modules/expo/config').getConfig('..',{skipSDKVersionRequirement:true}).exp.ios.bundleIdentifier")
+          xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus -configuration Release \
+            -destination "generic/platform=iOS" -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" CODE_SIGN_IDENTITY="Apple Distribution" archive | tail -n 60
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict><key>${BUNDLE_ID}</key><string>${PROFILE_UUID}</string></dict>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export"
+          mkdir -p ../out-ipa && cp "$RUNNER_TEMP/export/"*.ipa "../out-ipa/EdureoneCampus-$APP_VERSION-$APP_BUILD_NUMBER.ipa"
+      - uses: actions/upload-artifact@v4
+        if: ${{ env.STORE_BUILD == 'true' }}
+        with:
+          name: ios-${{ env.APP_VERSION }}-${{ env.APP_BUILD_NUMBER }}
+          path: out-ipa/*.ipa
+          if-no-files-found: error
