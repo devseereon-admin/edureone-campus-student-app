@@ -44,7 +44,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -152,24 +152,21 @@ jobs:
   ios:
     name: iOS
     needs: checks
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
-      # Xcode 26.3's Swift compiler rejects expo-modules-jsi 58.0.x
-      # ("sending 'slot' risks causing data races"), so use the newest
-      # installed Xcode 26 below 26.3.
+      # Expo SDK 58's expo-modules-jsi needs the Xcode 27 Swift compiler
+      # (Xcode 26.x fails with "sending 'slot' risks causing data races").
       - name: Select Xcode
         run: |
           ls -d /Applications/Xcode_*.app
-          for v in 26.2 26.1.1 26.1 26.0.1 26.0; do
-            if [ -d "/Applications/Xcode_$v.app" ]; then
-              sudo xcode-select -s "/Applications/Xcode_$v.app"; break
-            fi
-          done
+          X=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$X" ]; then echo "::error::No Xcode 27 on this runner image."; exit 1; fi
+          sudo xcode-select -s "$X"
           xcodebuild -version
       - run: npm ci
 
