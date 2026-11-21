@@ -172,21 +172,33 @@ jobs:
         working-directory: ios
         run: |
           set -o pipefail
+          xcbfail() { echo "::group::xcodebuild errors"; grep -nE "(error|fatal error):|\*\* (BUILD|ARCHIVE) FAILED|Command .* failed" "$RUNNER_TEMP/xcodebuild.log" | cut -c1-600 | head -80; echo "::endgroup::"; grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | head -5 | cut -c1-400 | sed 's/^/::error::/'; tail -n 80 "$RUNNER_TEMP/xcodebuild.log" | cut -c1-400; }
           xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus \
             -configuration Release -sdk iphonesimulator \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "$RUNNER_TEMP/dd-sim" \
-            CODE_SIGNING_ALLOWED=NO build | tail -n 60
+            CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
+          tail -n 20 "$RUNNER_TEMP/xcodebuild.log"
 
       - name: Release build (device, unsigned)
         if: ${{ env.STORE_BUILD != 'true' }}
         working-directory: ios
         run: |
           set -o pipefail
+          xcbfail() { echo "::group::xcodebuild errors"; grep -nE "(error|fatal error):|\*\* (BUILD|ARCHIVE) FAILED|Command .* failed" "$RUNNER_TEMP/xcodebuild.log" | cut -c1-600 | head -80; echo "::endgroup::"; grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | head -5 | cut -c1-400 | sed 's/^/::error::/'; tail -n 80 "$RUNNER_TEMP/xcodebuild.log" | cut -c1-400; }
           xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus \
             -configuration Release -sdk iphoneos -destination "generic/platform=iOS" \
             -derivedDataPath "$RUNNER_TEMP/dd-device" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tail -n 60
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
+          tail -n 20 "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Upload xcodebuild log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcodebuild-log
+          path: ${{ runner.temp }}/xcodebuild.log
+          if-no-files-found: ignore
 
       - name: Package simulator app
         run: |
@@ -228,11 +240,13 @@ jobs:
         working-directory: ios
         run: |
           set -o pipefail
+          xcbfail() { echo "::group::xcodebuild errors"; grep -nE "(error|fatal error):|\*\* (BUILD|ARCHIVE) FAILED|Command .* failed" "$RUNNER_TEMP/xcodebuild.log" | cut -c1-600 | head -80; echo "::endgroup::"; grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | head -5 | cut -c1-400 | sed 's/^/::error::/'; tail -n 80 "$RUNNER_TEMP/xcodebuild.log" | cut -c1-400; }
           BUNDLE_ID=$(node -p "require('../node_modules/expo/config').getConfig('..',{skipSDKVersionRequirement:true}).exp.ios.bundleIdentifier")
           xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus -configuration Release \
             -destination "generic/platform=iOS" -archivePath "$RUNNER_TEMP/App.xcarchive" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" CODE_SIGN_IDENTITY="Apple Distribution" archive | tail -n 60
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" CODE_SIGN_IDENTITY="Apple Distribution" archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
+          tail -n 20 "$RUNNER_TEMP/xcodebuild.log"
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
