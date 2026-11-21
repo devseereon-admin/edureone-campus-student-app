@@ -116,6 +116,13 @@ jobs:
           fi
           [ "$STORE_BUILD" = "true" ] && echo "REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV" || true
 
+      - name: Backend address set?
+        run: |
+          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
+            if [ "$STORE_BUILD" = "true" ]; then echo "::error::Repository variable EXPO_PUBLIC_API_URL is empty; a store build would not reach the backend."; exit 1; fi
+            echo "::warning::Repository variable EXPO_PUBLIC_API_URL is empty: this verification build cannot sign in."
+          fi
+
       - name: Generate native project
         run: npx expo prebuild --platform android --no-install --clean
 
