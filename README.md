@@ -91,7 +91,7 @@ included `eas.json` if you prefer Expo's cloud builds (needs an Expo account).
 npm ci
 npx expo prebuild --clean          # generates android/ and ios/ (not committed)
 npx expo run:android               # or: cd android && ./gradlew assembleRelease  (JDK 17)
-npx expo run:ios                   # macOS + Xcode 27+
+npx expo run:ios                   # macOS + Xcode 26.4+
 ```
 
 ## Push
