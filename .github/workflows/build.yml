@@ -41,6 +41,10 @@ on:
         description: "Sign for the stores (fails if signing secrets are missing)"
         type: boolean
         default: true
+      ios:
+        description: "Also build iOS (needs an active Apple Developer account)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -109,6 +113,13 @@ jobs:
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            # Keystores made by the "Create Android upload key" workflow are also
+            # encrypted with the keystore password (the repo is public).
+            if [ "$(head -c 8 "$RUNNER_TEMP/upload.jks")" = "Salted__" ]; then
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:ANDROID_KEYSTORE_PASSWORD \
+                -in "$RUNNER_TEMP/upload.jks" -out "$RUNNER_TEMP/upload.dec.jks"
+              mv "$RUNNER_TEMP/upload.dec.jks" "$RUNNER_TEMP/upload.jks"
+            fi
             {
               echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks"
               echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
@@ -158,6 +169,7 @@ jobs:
   ios:
     name: iOS
     needs: checks
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.ios == 'true' }}
     runs-on: macos-26
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}

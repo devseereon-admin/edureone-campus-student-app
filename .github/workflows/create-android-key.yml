@@ -1,0 +1,56 @@
+# =============================================================================
+# Create Android upload key: one click, no Java on your computer.
+#
+# Uses the ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD
+# secrets, creates the upload keystore and attaches ONE text file to the run:
+# ANDROID_KEYSTORE_BASE64.txt. Open it in Notepad, copy everything, and save it
+# as the repository secret ANDROID_KEYSTORE_BASE64. Keep a copy of that file
+# (and the password) safe: every Play update must be signed with this key.
+#
+# Because this repository is public, the keystore inside the file is encrypted
+# with the keystore password; the Build apps workflow decrypts it.
+# =============================================================================
+name: Create Android upload key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "17" }
+      - name: Create keystore
+        env:
+          EXISTING: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          if [ -n "$EXISTING" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is already set. Delete that secret first if you really want a NEW key (Play only accepts the key it already knows)."
+            exit 1
+          fi
+          if [ -z "$PW" ] || [ -z "$KEY_PW" ] || [ -z "$ALIAS" ]; then
+            echo "::error::Set ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_PASSWORD and ANDROID_KEY_ALIAS first."
+            exit 1
+          fi
+          keytool -genkeypair -keystore upload.jks -storetype JKS -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PW" -keypass "$KEY_PW" \
+            -dname "CN=Seereon Consulting & IT Services, OU=Edureone, O=Seereon Consulting & IT Services, L=Bhubaneswar, ST=Odisha, C=IN"
+          keytool -list -keystore upload.jks -storepass "$PW" -alias "$ALIAS" | tail -n 3
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PW -in upload.jks -out upload.jks.enc
+          mkdir out
+          base64 -w0 upload.jks.enc > out/ANDROID_KEYSTORE_BASE64.txt
+          rm -f upload.jks upload.jks.enc
+          echo "::notice::Done. Download the artifact, open ANDROID_KEYSTORE_BASE64.txt in Notepad and save its text as the ANDROID_KEYSTORE_BASE64 secret."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-upload-key
+          path: out/ANDROID_KEYSTORE_BASE64.txt
+          retention-days: 3
