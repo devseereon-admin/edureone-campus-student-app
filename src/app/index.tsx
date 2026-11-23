@@ -7,12 +7,12 @@ import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation, type WebViewProps } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { Button, colors } from '@/components/ui';
-import { INJECTED_BEFORE_LOAD, SIGN_OUT_SCRIPT, navigateScript, parseBridgeMessage } from '@/lib/bridge';
+import { SIGN_OUT_SCRIPT, injectedBeforeLoad, navigateScript, parseBridgeMessage } from '@/lib/bridge';
 import { WEB_URL } from '@/lib/config';
 import { openLocalFile } from '@/lib/files';
 import { START_SIGNED_IN, START_SIGNED_OUT, TABS, activeTab, showsTabBar } from '@/lib/portal-nav';
@@ -30,6 +30,8 @@ const WEB_ORIGIN = (() => {
     return '';
   }
 })();
+
+const INJECTED = injectedBeforeLoad(WEB_ORIGIN);
 
 const safeName = (name: string) => name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'download';
 
@@ -72,6 +74,8 @@ export default function Portal() {
   const [offline, setOffline] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [keyboard, setKeyboard] = useState(0);
   const pendingPath = useRef<string | null>(null);
   const loadedOnce = useRef(false);
   const [loaded, setLoaded] = useState(false);
@@ -107,6 +111,19 @@ export default function Portal() {
       }),
     [failed],
   );
+
+  // Android 15+ draws edge-to-edge, so the window no longer shrinks for the
+  // keyboard and a WebView's inputs would sit behind it. Lift the portal
+  // above the keyboard ourselves (iOS's WKWebView already does this).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   // Android back button: walk the portal's history, then leave the app.
   useEffect(() => {
@@ -160,9 +177,14 @@ export default function Portal() {
     return false;
   }, []);
 
-  const onNavState = useCallback((nav: WebViewNavigation) => {
-    setCanGoBack(nav.canGoBack);
-  }, []);
+  const onNavState = useCallback(
+    (nav: WebViewNavigation) => {
+      setCanGoBack(nav.canGoBack);
+      // Payment gateway or another site: no tab bar until we are back on the portal.
+      if (WEB_ORIGIN && nav.url && !nav.url.startsWith(WEB_ORIGIN)) setPath('#external');
+    },
+    [setPath],
+  );
 
   const onLoadEnd = useCallback(() => {
     setLoading(false);
@@ -186,20 +208,26 @@ export default function Portal() {
   }
 
   const tab = activeTab(shell.path);
-  const tabBar = shell.user && showsTabBar(shell.path);
+  const tabBar = shell.user && showsTabBar(shell.path) && keyboard === 0;
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top }}>
+    <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top, paddingBottom: keyboard }}>
+      {progress > 0 && progress < 1 && loaded ? (
+        <View style={[styles.progress, { top: insets.top, width: `${Math.round(progress * 100)}%` }]} />
+      ) : null}
       <PortalWebView
         ref={web}
         source={{ uri: `${WEB_URL}${startPath}` }}
         style={{ flex: 1 }}
         originWhitelist={['*']}
-        injectedJavaScriptBeforeContentLoaded={INJECTED_BEFORE_LOAD}
+        injectedJavaScriptBeforeContentLoaded={INJECTED}
         onMessage={onMessage}
         onShouldStartLoadWithRequest={onShouldStart}
         onNavigationStateChange={onNavState}
         onLoadEnd={onLoadEnd}
+        onLoadProgress={(e) => setProgress(e.nativeEvent.progress)}
+        overScrollMode="never"
+        cacheEnabled
         onError={() => setFailed(true)}
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 500 && e.nativeEvent.url.startsWith(WEB_ORIGIN)) setFailed(true);
@@ -247,7 +275,7 @@ export default function Portal() {
           />
         </View>
       ) : (
-        <View style={{ height: insets.bottom, backgroundColor: '#fff' }} />
+        <View style={{ height: keyboard ? 0 : insets.bottom, backgroundColor: '#fff' }} />
       )}
 
       {loading && !loaded ? (
@@ -324,6 +352,7 @@ const styles = StyleSheet.create({
   },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, paddingVertical: 2 },
   tabText: { fontSize: 11 },
+  progress: { position: 'absolute', left: 0, height: 2, backgroundColor: colors.accent, zIndex: 10 },
   banner: { position: 'absolute', left: 0, right: 0, backgroundColor: colors.amber, paddingVertical: 4 },
   bannerText: { color: '#fff', textAlign: 'center', fontWeight: '600', fontSize: 12 },
 });

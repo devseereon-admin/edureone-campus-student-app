@@ -40,15 +40,20 @@ export function navigateScript(path: string): string {
 
 /** Clears the portal's client session (same keys as the portal's own logout). */
 export const SIGN_OUT_SCRIPT = `(function(){
-  var L=["user","edureone.auth.user","access_token","refresh_token","session_uuid","active_institute_uuid","auth-storage","institute-storage"];
+  var L=["user","edureone.auth.user","access_token","refresh_token","session_uuid","active_institute_uuid","auth-storage","institute-storage","edureone.parent.opened-child"];
   var S=["edureone.superadmin.global.session","edureone.student-selection"];
   L.forEach(function(k){try{localStorage.removeItem(k)}catch(e){}});
   S.forEach(function(k){try{sessionStorage.removeItem(k)}catch(e){}});
   location.replace("/login/student");
 })(); true;`;
 
-export const INJECTED_BEFORE_LOAD = `(function () {
+/**
+ * Only runs on the portal itself: payment gateway pages and other sites the
+ * portal redirects to are left untouched.
+ */
+export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
   if (window.__edureoneShell) return;
+  if (${JSON.stringify(portalOrigin)} && location.origin !== ${JSON.stringify(portalOrigin)}) return;
   window.__edureoneShell = { version: 1 };
   var post = function (msg) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch (e) {}
