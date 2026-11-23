@@ -58,8 +58,8 @@ Secrets (the same values as the web repo's *Mobile release* workflow can be reus
 |--------|------|
 | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | Play upload key (`base64 -w0 upload.jks`) |
 | `GOOGLE_SERVICES_JSON` | optional, Firebase Android config, enables push |
-| `IOS_CERTIFICATE_P12_BASE64`, `IOS_CERTIFICATE_PASSWORD` | Apple Distribution certificate |
-| `IOS_PROVISIONING_PROFILE_BASE64` | App Store profile for the bundle id, **Push Notifications** capability on |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | **Simplest iOS signing**: an App Store Connect API key (Users and Access → Integrations → App Store Connect API, role Admin). Xcode creates the certificate + profile itself and the build is uploaded to TestFlight |
+| `IOS_CERTIFICATE_P12_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64` | Alternative manual iOS signing: Apple Distribution certificate + App Store profile |
 
 ### EAS (alternative)
 

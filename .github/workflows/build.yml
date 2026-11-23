@@ -18,7 +18,7 @@
 #   Secrets   : ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
 #               ANDROID_KEY_PASSWORD, GOOGLE_SERVICES_JSON (optional, enables push),
 #               IOS_CERTIFICATE_P12_BASE64, IOS_CERTIFICATE_PASSWORD,
-#               IOS_PROVISIONING_PROFILE_BASE64
+#               IOS_PROVISIONING_PROFILE_BASE64  (or, simpler: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8)
 #   The same values as the web repo's Mobile release workflow can be reused.
 # =============================================================================
 name: Build apps
@@ -223,15 +223,42 @@ jobs:
           path: out/*.zip
 
       # ---- Signed App Store build (manual runs with store_build) -------------
-      - name: Import signing certificate + profile
+      # Two ways to sign the App Store build:
+      #  A) App Store Connect API key (simplest): secrets ASC_KEY_ID, ASC_ISSUER_ID,
+      #     ASC_KEY_P8 (the .p8 file's text). Xcode creates the certificate and
+      #     profile itself, and the build is uploaded to TestFlight.
+      #  B) Manual: secrets IOS_CERTIFICATE_P12_BASE64, IOS_CERTIFICATE_PASSWORD,
+      #     IOS_PROVISIONING_PROFILE_BASE64.
+      # Both need the APPLE_TEAM_ID variable.
+      - name: Signing setup
         if: ${{ env.STORE_BUILD == 'true' }}
         env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
-          if [ -z "$P12_BASE64" ] || [ -z "$PROFILE_BASE64" ] || [ -z "$APPLE_TEAM_ID" ]; then
-            echo "::error::IOS_CERTIFICATE_P12_BASE64, IOS_PROVISIONING_PROFILE_BASE64 and the APPLE_TEAM_ID variable are required for a store build."
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::Repository variable APPLE_TEAM_ID is required for an App Store build (developer.apple.com > Membership)."
+            exit 1
+          fi
+          if [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8" ]; then
+            mkdir -p ~/.appstoreconnect/private_keys
+            KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+            printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
+            {
+              echo "SIGN_MODE=api"
+              echo "ASC_KEY_PATH=$KEY_PATH"
+              echo "ASC_KEY_ID=$ASC_KEY_ID"
+              echo "ASC_ISSUER_ID=$ASC_ISSUER_ID"
+            } >> "$GITHUB_ENV"
+            echo "Signing with the App Store Connect API key (automatic signing)."
+            exit 0
+          fi
+          if [ -z "$P12_BASE64" ] || [ -z "$PROFILE_BASE64" ]; then
+            echo "::error::Add either the App Store Connect API key secrets (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8) or IOS_CERTIFICATE_P12_BASE64 + IOS_PROVISIONING_PROFILE_BASE64."
             exit 1
           fi
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"; KEYCHAIN_PW="$(uuidgen)"
@@ -246,35 +273,54 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")")
           cp "$RUNNER_TEMP/profile.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
-          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+          { echo "SIGN_MODE=manual"; echo "PROFILE_UUID=$UUID"; } >> "$GITHUB_ENV"
 
       - name: Archive + export IPA
         if: ${{ env.STORE_BUILD == 'true' }}
         working-directory: ios
         run: |
           set -o pipefail
-          xcbfail() { echo "::group::xcodebuild errors"; grep -nE "(error|fatal error):|\*\* (BUILD|ARCHIVE) FAILED|Command .* failed" "$RUNNER_TEMP/xcodebuild.log" | cut -c1-600 | head -80; echo "::endgroup::"; grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | head -5 | cut -c1-400 | sed 's/^/::error::/'; tail -n 80 "$RUNNER_TEMP/xcodebuild.log" | cut -c1-400; }
+          xcbfail() { echo "::group::xcodebuild errors"; grep -nE "(error|fatal error):|\*\* (BUILD|ARCHIVE|EXPORT) FAILED|Command .* failed" "$RUNNER_TEMP/xcodebuild.log" | cut -c1-600 | head -80; echo "::endgroup::"; grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | head -5 | cut -c1-400 | sed 's/^/::error::/'; tail -n 80 "$RUNNER_TEMP/xcodebuild.log" | cut -c1-400; }
           BUNDLE_ID=$(node -p "require('../node_modules/expo/config').getConfig('..',{skipSDKVersionRequirement:true}).exp.ios.bundleIdentifier")
+          if [ "$SIGN_MODE" = "api" ]; then
+            AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic)
+            OPTS="<key>signingStyle</key><string>automatic</string>"
+          else
+            AUTH=()
+            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" CODE_SIGN_IDENTITY="Apple Distribution")
+            OPTS="<key>signingStyle</key><string>manual</string><key>signingCertificate</key><string>Apple Distribution</string><key>provisioningProfiles</key><dict><key>${BUNDLE_ID}</key><string>${PROFILE_UUID}</string></dict>"
+          fi
           xcodebuild -workspace EdureoneCampus.xcworkspace -scheme EdureoneCampus -configuration Release \
             -destination "generic/platform=iOS" -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" CODE_SIGN_IDENTITY="Apple Distribution" archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
+            "${AUTH[@]}" "${SIGN[@]}" archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
           tail -n 20 "$RUNNER_TEMP/xcodebuild.log"
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          write_opts() {
+            cat > "$RUNNER_TEMP/ExportOptions-$1.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
-            <key>signingStyle</key><string>manual</string>
+            <key>destination</key><string>$1</string>
             <key>teamID</key><string>${APPLE_TEAM_ID}</string>
-            <key>signingCertificate</key><string>Apple Distribution</string>
-            <key>provisioningProfiles</key><dict><key>${BUNDLE_ID}</key><string>${PROFILE_UUID}</string></dict>
+            ${OPTS}
             <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
           PLIST
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export"
+          }
+          write_opts export
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" "${AUTH[@]}" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-export.plist" -exportPath "$RUNNER_TEMP/export" > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
           mkdir -p ../out-ipa && cp "$RUNNER_TEMP/export/"*.ipa "../out-ipa/EdureoneCampus-$APP_VERSION-$APP_BUILD_NUMBER.ipa"
+          if [ "$SIGN_MODE" = "api" ]; then
+            # Same archive, sent to App Store Connect: it appears in TestFlight in ~10-30 minutes.
+            write_opts upload
+            xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" "${AUTH[@]}" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-upload.plist" -exportPath "$RUNNER_TEMP/upload" > "$RUNNER_TEMP/xcodebuild.log" 2>&1 \
+              && echo "::notice::Uploaded to App Store Connect (TestFlight)." \
+              || { xcbfail; echo "::warning::Upload to App Store Connect failed; the signed IPA is still attached to this run (upload it with Transporter)."; }
+          fi
       - uses: actions/upload-artifact@v4
         if: ${{ env.STORE_BUILD == 'true' }}
         with:
