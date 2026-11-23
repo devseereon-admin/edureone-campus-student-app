@@ -1,0 +1,71 @@
+name: Android smoke test
+
+# Installs an APK from an earlier "Build apps" run on an Android emulator,
+# opens it, and prints any crash. Run it from the Actions tab with the run id.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run id of the "Build apps" run that holds the APK'
+        required: true
+      api_level:
+        description: Android API level of the emulator
+        default: '34'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: apk
+          pattern: android-*
+
+      - name: Find APK
+        run: |
+          APK=$(find apk -name '*.apk' | head -1)
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          ls -la "$APK"
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ github.event.inputs.api_level }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: |
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell monkey -p com.seereon.edureon -c android.intent.category.LAUNCHER 1
+            sleep 45
+            echo "===== CRASH BUFFER ====="
+            adb logcat -d -b crash || true
+            echo "===== APP / RUNTIME ERRORS ====="
+            adb logcat -d | grep -E "AndroidRuntime|ReactNativeJS|ReactNative|Expo|FATAL|libc  |DEBUG   |seereon" | tail -300 || true
+            echo "===== TOP ACTIVITY ====="
+            adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
+            adb shell pidof com.seereon.edureon && echo "APP STILL RUNNING" || echo "APP NOT RUNNING"
+            adb exec-out screencap -p > screen.png || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screen
+          path: screen.png
+          if-no-files-found: ignore
