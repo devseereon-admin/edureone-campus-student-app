@@ -245,7 +245,9 @@ export default function Portal() {
         allowFileAccess={false}
         mixedContentMode="never"
         textZoom={100}
-        decelerationRate="normal"
+        // A number, not "normal": the Android view manager casts this prop to a
+        // Double and crashes on a string (iOS "normal" scrolling = 0.998).
+        decelerationRate={0.998}
         applicationNameForUserAgent="EdureoneCampusApp/1"
         webviewDebuggingEnabled={__DEV__}
       />

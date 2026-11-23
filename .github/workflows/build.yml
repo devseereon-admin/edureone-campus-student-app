@@ -166,6 +166,42 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  android-launch-test:
+    # Opens the APK just built on an Android emulator and fails if it crashes
+    # on start, so a broken build never reaches a phone or the Play Store.
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/download-artifact@v4
+        with:
+          path: apk
+          pattern: android-*
+      - name: Find APK
+        run: echo "APK=$(find apk -name '*.apk' | head -1)" >> "$GITHUB_ENV"
+      - name: Open the app on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: |
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell monkey -p com.seereon.edureon -c android.intent.category.LAUNCHER 1
+            sleep 40
+            adb logcat -d -b crash > crash.txt || true
+            cat crash.txt
+            adb shell pidof com.seereon.edureon || (echo "::error::The app is not running 40 s after launch" && exit 1)
+            ! grep -q "com.seereon.edureon" crash.txt || (echo "::error::The app crashed on launch (see the log above)" && exit 1)
+
   ios:
     name: iOS
     needs: checks
