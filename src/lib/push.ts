@@ -2,8 +2,7 @@ import * as Application from 'expo-application';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { request } from './api';
-import { APP_VERSION } from './config';
+import { API_URL, APP_VERSION } from './config';
 import { KEYS, getItem, removeItem, setItem } from './storage';
 
 /**
@@ -16,7 +15,7 @@ import { KEYS, getItem, removeItem, setItem } from './storage';
  *  - iOS: the native token is an APNs token, which FCM cannot address
  *    directly. The app still asks permission and listens for notifications;
  *    register iOS once the backend can send to APNs (see README "Push").
- * Payloads may carry data.url (e.g. "/student/notices"); tapping opens that screen.
+ * Payloads may carry data.url (e.g. "/student/notices"); tapping opens that page.
  */
 export const CHANNEL_ID = 'edureon_default';
 
@@ -50,7 +49,26 @@ async function deviceId(): Promise<string | undefined> {
   }
 }
 
-export async function registerForPush(): Promise<void> {
+export type WebSession = { token: string; institute?: string | null };
+
+async function callDevices(path: string, session: WebSession, body: Record<string, unknown>) {
+  if (!API_URL) return;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${session.token}`,
+  };
+  if (session.institute && session.institute !== '__all__') headers['X-Institute-UUID'] = session.institute;
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+/**
+ * Ask for notification permission and register this phone for the person
+ * signed in to the portal (same POST /devices/register contract the portal's
+ * Capacitor build uses). Safe to call repeatedly.
+ */
+export async function registerForPush(session: WebSession): Promise<void> {
   if (!Device.isDevice) return;
   await ensureChannel();
   const current = await Notifications.getPermissionsAsync();
@@ -61,40 +79,31 @@ export async function registerForPush(): Promise<void> {
     const token = await Notifications.getDevicePushTokenAsync();
     const value = String(token.data || '');
     if (value.length < 10) return;
-    await request('/devices/register', {
-      method: 'POST',
-      body: { token: value, platform: 'android', device_id: await deviceId(), app_version: APP_VERSION },
-      ignore401: true,
+    await callDevices('/devices/register', session, {
+      token: value,
+      platform: 'android',
+      device_id: await deviceId(),
+      app_version: APP_VERSION,
     });
     await setItem(KEYS.pushToken, value);
   } catch {
     // No google-services.json in this build, or the backend refused the
-    // student token. Push is optional; the app works without it.
+    // token. Push is optional; the app works without it.
   }
 }
 
-export async function unregisterPush(): Promise<void> {
+/** Detach this phone from the person who just signed out (best effort). */
+export async function unregisterPush(session: WebSession | null): Promise<void> {
   const token = await getItem(KEYS.pushToken);
   if (!token) return;
-  await request('/devices/unregister', { method: 'POST', body: { token, device_id: await deviceId() }, ignore401: true }).catch(() => null);
+  if (session) await callDevices('/devices/unregister', session, { token, device_id: await deviceId() }).catch(() => null);
   await removeItem(KEYS.pushToken);
+  await Notifications.dismissAllNotificationsAsync().catch(() => null);
 }
 
-/** Map a web-portal path from a push payload to an app route. */
-export function routeForPushUrl(url?: unknown): string | null {
+/** Portal path carried by a push payload (data.url), e.g. "/student/notices". */
+export function pathForPushUrl(url?: unknown): string | null {
   if (typeof url !== 'string' || !url) return null;
-  const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
-  const map: Record<string, string> = {
-    '/student/dashboard': '/',
-    '/student/notices': '/notices',
-    '/student/results': '/exams',
-    '/student/exams': '/exams',
-    '/student/fees': '/fees',
-    '/student/attendance': '/attendance',
-    '/student/timetable': '/timetable',
-    '/student/assignments': '/assignments',
-    '/student/materials': '/materials',
-    '/student/gate-pass': '/gate-passes',
-  };
-  return map[path] ?? null;
+  const path = url.replace(/^https?:\/\/[^/]+/, '');
+  return path.startsWith('/') && !path.startsWith('//') ? path : null;
 }

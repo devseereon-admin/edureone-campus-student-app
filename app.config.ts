@@ -1,13 +1,13 @@
 import type { ExpoConfig } from 'expo/config';
 
 /**
- * Edureone Campus — student app (React Native / Expo).
+ * Edureone Campus — student app (React Native / Expo hybrid shell).
  *
  * Everything that differs per school or per release comes from environment
  * variables, so CI can build without editing this file:
  *
- *   EXPO_PUBLIC_API_URL      FastAPI base, e.g. https://api.example.com/api/v1
- *   EXPO_PUBLIC_WEB_URL      hosted web portal (used for "User login" and online fee payment)
+ *   EXPO_PUBLIC_WEB_URL      hosted web portal the app shows, e.g. https://portal.example.com
+ *   EXPO_PUBLIC_API_URL      FastAPI base (only used to register push tokens)
  *   APP_VERSION              marketing version shown in the stores (1.0.0)
  *   APP_BUILD_NUMBER         Android versionCode / iOS build number, +1 every upload
  *   APP_BUNDLE_ID            defaults to com.seereon.edureon (same id as the current

@@ -1,0 +1,329 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
+import NetInfo from '@react-native-community/netinfo';
+import { Directory, File, Paths } from 'expo-file-system';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import * as Linking from 'expo-linking';
+import { router } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WebView, type WebViewMessageEvent, type WebViewNavigation, type WebViewProps } from 'react-native-webview';
+import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
+import { Button, colors } from '@/components/ui';
+import { INJECTED_BEFORE_LOAD, SIGN_OUT_SCRIPT, navigateScript, parseBridgeMessage } from '@/lib/bridge';
+import { WEB_URL } from '@/lib/config';
+import { openLocalFile } from '@/lib/files';
+import { START_SIGNED_IN, START_SIGNED_OUT, TABS, activeTab, showsTabBar } from '@/lib/portal-nav';
+import { useShell } from '@/lib/shell';
+
+// react-native-webview's class typings resolve to `never` under TypeScript 6;
+// describe the bits we use.
+type WebViewHandle = { injectJavaScript: (js: string) => void; reload: () => void; goBack: () => void };
+const PortalWebView = WebView as unknown as React.ComponentType<WebViewProps & { ref?: React.Ref<WebViewHandle> }>;
+
+const WEB_ORIGIN = (() => {
+  try {
+    return new URL(WEB_URL).origin;
+  } catch {
+    return '';
+  }
+})();
+
+const safeName = (name: string) => name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'download';
+
+function downloadsDir() {
+  const dir = new Directory(Paths.cache, 'downloads');
+  if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+  return dir;
+}
+
+async function saveBase64(name: string, mime: string, base64: string) {
+  const file = new File(downloadsDir(), safeName(name));
+  if (file.exists) file.delete();
+  file.create();
+  file.write(base64, { encoding: 'base64' });
+  await openLocalFile(file.uri, mime);
+}
+
+async function saveFromUrl(url: string, name: string, token?: string | null) {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const target = new File(downloadsDir(), safeName(name));
+  const file = await File.downloadFileAsync(url, target, { headers, idempotent: true });
+  await openLocalFile(file.uri, file.type || undefined);
+}
+
+const openExternal = (url: string) =>
+  WebBrowser.openBrowserAsync(url, {
+    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+    controlsColor: colors.primary,
+  }).catch(() => Linking.openURL(url));
+
+export default function Portal() {
+  const shell = useShell();
+  const { setUser, setPath, onCommand } = shell;
+  const insets = useSafeAreaInsets();
+  const web = useRef<WebViewHandle>(null);
+  const [startPath] = useState(() => (shell.hadSession ? START_SIGNED_IN : START_SIGNED_OUT));
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const pendingPath = useRef<string | null>(null);
+  const loadedOnce = useRef(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const go = useCallback((path: string) => {
+    if (!loadedOnce.current) {
+      pendingPath.current = path;
+      return;
+    }
+    web.current?.injectJavaScript(navigateScript(path));
+  }, []);
+
+  // Commands from native screens (More, push taps).
+  useEffect(
+    () =>
+      onCommand((c) => {
+        if (c.kind === 'navigate') go(c.path);
+        if (c.kind === 'reload') web.current?.reload();
+        if (c.kind === 'signOut') web.current?.injectJavaScript(SIGN_OUT_SCRIPT);
+      }),
+    [onCommand, go],
+  );
+
+  useEffect(
+    () =>
+      NetInfo.addEventListener((s) => {
+        const isOff = s.isConnected === false;
+        setOffline(isOff);
+        if (!isOff && failed) {
+          setFailed(false);
+          web.current?.reload();
+        }
+      }),
+    [failed],
+  );
+
+  // Android back button: walk the portal's history, then leave the app.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (canGoBack && shell.path !== '/student/dashboard' && shell.path !== START_SIGNED_OUT) {
+        web.current?.goBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [canGoBack, shell.path]);
+
+  const onMessage = useCallback(
+    async (event: WebViewMessageEvent) => {
+      const msg = parseBridgeMessage(event.nativeEvent.data);
+      if (!msg) return;
+      switch (msg.type) {
+        case 'route':
+          setPath(msg.path);
+          break;
+        case 'session':
+          setUser(msg.token ? { token: msg.token, institute: msg.institute, name: msg.name, role: msg.role } : null);
+          break;
+        case 'external':
+          openExternal(msg.url);
+          break;
+        case 'download':
+        case 'downloadUrl':
+          setBusy(true);
+          try {
+            if (msg.type === 'download') await saveBase64(msg.name, msg.mime, msg.base64);
+            else await saveFromUrl(msg.url, msg.name, msg.token);
+          } catch {
+            if (msg.type === 'downloadUrl') openExternal(msg.url);
+          } finally {
+            setBusy(false);
+          }
+          break;
+      }
+    },
+    [setPath, setUser],
+  );
+
+  const onShouldStart = useCallback((req: ShouldStartLoadRequest) => {
+    const url = req.url || '';
+    if (/^(https?:|about:|blob:|data:|javascript:)/i.test(url)) return true;
+    // upi://, tel:, mailto:, intent:, whatsapp: ... belong to other apps.
+    Linking.openURL(url).catch(() => null);
+    return false;
+  }, []);
+
+  const onNavState = useCallback((nav: WebViewNavigation) => {
+    setCanGoBack(nav.canGoBack);
+  }, []);
+
+  const onLoadEnd = useCallback(() => {
+    setLoading(false);
+    if (!loadedOnce.current) {
+      loadedOnce.current = true;
+      setLoaded(true);
+      if (pendingPath.current) {
+        web.current?.injectJavaScript(navigateScript(pendingPath.current));
+        pendingPath.current = null;
+      }
+    }
+  }, []);
+
+  if (!WEB_URL) {
+    return (
+      <View style={[styles.center, { paddingTop: insets.top }]}>
+        <Text style={styles.title}>Portal address missing</Text>
+        <Text style={styles.body}>This build was made without EXPO_PUBLIC_WEB_URL.</Text>
+      </View>
+    );
+  }
+
+  const tab = activeTab(shell.path);
+  const tabBar = shell.user && showsTabBar(shell.path);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top }}>
+      <PortalWebView
+        ref={web}
+        source={{ uri: `${WEB_URL}${startPath}` }}
+        style={{ flex: 1 }}
+        originWhitelist={['*']}
+        injectedJavaScriptBeforeContentLoaded={INJECTED_BEFORE_LOAD}
+        onMessage={onMessage}
+        onShouldStartLoadWithRequest={onShouldStart}
+        onNavigationStateChange={onNavState}
+        onLoadEnd={onLoadEnd}
+        onError={() => setFailed(true)}
+        onHttpError={(e) => {
+          if (e.nativeEvent.statusCode >= 500 && e.nativeEvent.url.startsWith(WEB_ORIGIN)) setFailed(true);
+        }}
+        onContentProcessDidTerminate={() => web.current?.reload()}
+        onRenderProcessGone={() => web.current?.reload()}
+        javaScriptEnabled
+        domStorageEnabled
+        sharedCookiesEnabled
+        thirdPartyCookiesEnabled
+        allowsBackForwardNavigationGestures
+        pullToRefreshEnabled
+        allowsInlineMediaPlayback
+        setSupportMultipleWindows={false}
+        allowFileAccess={false}
+        mixedContentMode="never"
+        textZoom={100}
+        decelerationRate="normal"
+        applicationNameForUserAgent="EdureoneCampusApp/1"
+        webviewDebuggingEnabled={__DEV__}
+      />
+
+      {tabBar ? (
+        <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 6) }]}>
+          {TABS.map((t) => (
+            <TabButton
+              key={t.key}
+              icon={t.icon}
+              title={t.title}
+              active={tab === t.key}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => null);
+                go(t.path);
+              }}
+            />
+          ))}
+          <TabButton
+            icon="grid-outline"
+            title="More"
+            active={tab === 'more'}
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => null);
+              router.push('/more');
+            }}
+          />
+        </View>
+      ) : (
+        <View style={{ height: insets.bottom, backgroundColor: '#fff' }} />
+      )}
+
+      {loading && !loaded ? (
+        <View style={[StyleSheet.absoluteFill, styles.center]}>
+          <Image source={require('@/assets/brand/edureone-logo.png')} style={{ width: 180, height: 110 }} contentFit="contain" />
+          <ActivityIndicator color={colors.primary} style={{ marginTop: 16 }} />
+        </View>
+      ) : null}
+
+      {failed || (offline && !loaded) ? (
+        <View style={[StyleSheet.absoluteFill, styles.center, { paddingTop: insets.top }]}>
+          <Ionicons name="cloud-offline-outline" size={56} color={colors.muted} />
+          <Text style={styles.title}>{offline ? 'You are offline' : 'Could not reach Edureone Campus'}</Text>
+          <Text style={styles.body}>Check your internet connection and try again. The app reconnects automatically.</Text>
+          <View style={{ alignSelf: 'stretch', marginTop: 12 }}>
+            <Button
+              title="Try again"
+              icon="refresh"
+              onPress={() => {
+                setFailed(false);
+                web.current?.reload();
+              }}
+            />
+          </View>
+        </View>
+      ) : null}
+
+      {offline && loaded && !failed ? (
+        <View style={[styles.banner, { top: insets.top }]}>
+          <Text style={styles.bannerText}>You are offline</Text>
+        </View>
+      ) : null}
+
+      {busy ? (
+        <View style={[StyleSheet.absoluteFill, styles.center, { backgroundColor: 'rgba(255,255,255,0.6)' }]}>
+          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={[styles.body, { marginTop: 8 }]}>Preparing file…</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function TabButton({
+  icon,
+  title,
+  active,
+  onPress,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  title: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const filled = (active ? String(icon).replace('-outline', '') : icon) as React.ComponentProps<typeof Ionicons>['name'];
+  return (
+    <Pressable onPress={onPress} style={styles.tab} accessibilityRole="tab" accessibilityState={{ selected: active }} accessibilityLabel={title}>
+      <Ionicons name={filled} size={22} color={active ? colors.primary : colors.muted} />
+      <Text style={[styles.tabText, { color: active ? colors.primary : colors.muted, fontWeight: active ? '700' : '500' }]}>{title}</Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: '#fff', gap: 8 },
+  title: { fontSize: 18, fontWeight: '700', color: colors.text, textAlign: 'center', marginTop: 8 },
+  body: { fontSize: 14, color: colors.muted, textAlign: 'center' },
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingTop: 6,
+  },
+  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, paddingVertical: 2 },
+  tabText: { fontSize: 11 },
+  banner: { position: 'absolute', left: 0, right: 0, backgroundColor: colors.amber, paddingVertical: 4 },
+  bannerText: { color: '#fff', textAlign: 'center', fontWeight: '600', fontSize: 12 },
+});

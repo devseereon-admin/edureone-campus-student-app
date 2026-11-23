@@ -122,11 +122,14 @@ jobs:
           fi
           [ "$STORE_BUILD" = "true" ] && echo "REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV" || true
 
-      - name: Backend address set?
+      - name: Portal address set?
         run: |
+          if [ -z "$EXPO_PUBLIC_WEB_URL" ]; then
+            if [ "$STORE_BUILD" = "true" ]; then echo "::error::Repository variable EXPO_PUBLIC_WEB_URL is empty; the app would have no portal to open."; exit 1; fi
+            echo "::warning::Repository variable EXPO_PUBLIC_WEB_URL is empty: this verification build shows a 'Portal address missing' screen."
+          fi
           if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            if [ "$STORE_BUILD" = "true" ]; then echo "::error::Repository variable EXPO_PUBLIC_API_URL is empty; a store build would not reach the backend."; exit 1; fi
-            echo "::warning::Repository variable EXPO_PUBLIC_API_URL is empty: this verification build cannot sign in."
+            echo "::warning::Repository variable EXPO_PUBLIC_API_URL is empty: push notifications cannot be registered."
           fi
 
       - name: Generate native project
