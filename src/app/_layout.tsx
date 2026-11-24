@@ -6,19 +6,21 @@ import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LockScreen } from '@/components/lock-screen';
 import { colors } from '@/components/ui';
-import { pathForPushUrl } from '@/lib/push';
+import { ensureChannel, pathForPushData } from '@/lib/push';
 import { ShellProvider, useShell } from '@/lib/shell';
 
 // Keep the native Edureone Campus splash up until the shell is ready.
 SplashScreen.preventAutoHideAsync().catch(() => null);
 SplashScreen.setOptions({ fade: true, duration: 250 });
+// Channels must exist before the first push arrives, even before sign-in.
+ensureChannel().catch(() => null);
 
 /** Tapping a push opens the page it points to (data.url, e.g. /student/notices). */
 function usePushNavigation(enabled: boolean, navigate: (path: string) => void) {
   const last = Notifications.useLastNotificationResponse();
   useEffect(() => {
     if (!enabled || !last) return;
-    const path = pathForPushUrl(last.notification.request.content.data?.url);
+    const path = pathForPushData(last.notification.request.content.data as Record<string, unknown> | null);
     if (path) navigate(path);
   }, [enabled, last, navigate]);
 }
