@@ -100,8 +100,9 @@ const config: ExpoConfig = {
       'expo-build-properties',
       {
         android: { usesCleartextTraffic: false },
-        // React Native Firebase (iOS push token) needs static frameworks.
-        ios: { useFrameworks: 'static', forceStaticLinking: ['RNFBApp', 'RNFBMessaging'] },
+        // React Native Firebase (iOS push token): Firebase 13+ ships only as
+        // Swift packages, which need dynamic frameworks.
+        ios: { useFrameworks: 'dynamic' },
       },
     ],
     // Firebase on iOS only, when GoogleService-Info.plist is provided (CI secret).
