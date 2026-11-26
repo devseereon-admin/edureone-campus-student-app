@@ -349,7 +349,10 @@ jobs:
           BUNDLE_ID=$(node -p "require('../node_modules/expo/config').getConfig('..',{skipSDKVersionRequirement:true}).exp.ios.bundleIdentifier")
           if [ "$SIGN_MODE" = "api" ]; then
             AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic)
+            # Archive with a local ad-hoc signature (keeps the entitlements, needs no
+            # development profile or registered iPhone), then let the export step
+            # sign for the App Store with Apple's cloud-managed distribution certificate.
+            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- PROVISIONING_PROFILE_SPECIFIER= PROVISIONING_PROFILE=)
             OPTS="<key>signingStyle</key><string>automatic</string>"
           else
             AUTH=()
@@ -378,6 +381,11 @@ jobs:
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" "${AUTH[@]}" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-export.plist" -exportPath "$RUNNER_TEMP/export" > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
           mkdir -p ../out-ipa && cp "$RUNNER_TEMP/export/"*.ipa "../out-ipa/EdureoneCampus-$APP_VERSION-$APP_BUILD_NUMBER.ipa"
+          # The App Store build must carry the push entitlement (production).
+          rm -rf "$RUNNER_TEMP/ipa" && mkdir -p "$RUNNER_TEMP/ipa" && unzip -q ../out-ipa/*.ipa -d "$RUNNER_TEMP/ipa"
+          ENT=$(codesign -d --entitlements :- "$RUNNER_TEMP"/ipa/Payload/*.app 2>/dev/null)
+          echo "$ENT" | grep -A1 -E "aps-environment|application-identifier"
+          echo "$ENT" | grep -A1 "aps-environment" | grep -q production || { echo "::error::The signed app has no production push entitlement."; exit 1; }
           if [ "$SIGN_MODE" = "api" ]; then
             # Same archive, sent to App Store Connect: it appears in TestFlight in ~10-30 minutes.
             write_opts upload
