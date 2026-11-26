@@ -349,10 +349,10 @@ jobs:
           BUNDLE_ID=$(node -p "require('../node_modules/expo/config').getConfig('..',{skipSDKVersionRequirement:true}).exp.ios.bundleIdentifier")
           if [ "$SIGN_MODE" = "api" ]; then
             AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-            # Archive with a local ad-hoc signature (keeps the entitlements, needs no
-            # development profile or registered iPhone), then let the export step
-            # sign for the App Store with Apple's cloud-managed distribution certificate.
-            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- PROVISIONING_PROFILE_SPECIFIER= PROVISIONING_PROFILE=)
+            # Archive unsigned (needs no development profile or registered iPhone;
+            # Xcode keeps the entitlements in the archive), then the export step signs
+            # for the App Store with Apple's cloud-managed distribution certificate.
+            SIGN=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
             OPTS="<key>signingStyle</key><string>automatic</string>"
           else
             AUTH=()
