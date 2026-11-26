@@ -67,7 +67,9 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
     "html.in-edureone-app .app-topbar{padding-top:0!important;height:3.5rem!important}" +
     "html.in-edureone-app .app-mobile-sidebar{padding-top:0!important;padding-bottom:0!important}" +
     "html.in-edureone-app main{padding-bottom:calc(var(--edureone-tabbar,0px) + 12px)!important}" +
-    "html.in-edureone-app body{-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}";
+    "html.in-edureone-app body{-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}" +
+    // Student & parent app: the staff "User login" link stays on the website only.
+    "html.in-edureone-app a[href='/login']{display:none!important}";
   var addStyle = function () {
     if (!document.head || document.getElementById("edureone-shell-css")) return;
     var s = document.createElement("style");
@@ -83,6 +85,8 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
   var lastPath = null;
   var reportRoute = function () {
     var p = location.pathname || "/";
+    // Staff login is not part of the student app.
+    if (p === "/login") { location.replace("/login/student"); return; }
     if (p === lastPath) return;
     lastPath = p;
     post({ type: "route", path: p, title: document.title });
