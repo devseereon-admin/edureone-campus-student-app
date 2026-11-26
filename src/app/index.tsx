@@ -8,7 +8,7 @@ import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, BackHandler, Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation, type WebViewProps } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
@@ -35,6 +35,7 @@ const WEB_ORIGIN = (() => {
 const INJECTED = injectedBeforeLoad(WEB_ORIGIN);
 
 const PILL_HEIGHT = 62;
+const PILL_PAD = 5;
 /** Tells the portal how much room to leave under its pages for the tab bar. */
 const reserveScript = (px: number) =>
   `document.documentElement.style.setProperty('--edureone-tabbar', '${Math.round(px)}px'); true;`;
@@ -95,6 +96,19 @@ export default function Portal() {
     reserveRef.current = reserve;
     if (loaded) web.current?.injectJavaScript(reserveScript(reserve));
   }, [reserve, loaded]);
+
+  // iOS-style capsule that glides to the selected tab.
+  const [pillWidth, setPillWidth] = useState(0);
+  const [capsuleX] = useState(() => new Animated.Value(0));
+  const activeIndex = (() => {
+    const k = activeTab(shell.path);
+    return k === 'more' ? TABS.length : TABS.findIndex((t) => t.key === k);
+  })();
+  useEffect(() => {
+    if (pillWidth <= 0 || activeIndex < 0) return;
+    const w = (pillWidth - PILL_PAD * 2) / (TABS.length + 1);
+    Animated.spring(capsuleX, { toValue: activeIndex * w, useNativeDriver: true, speed: 18, bounciness: 6 }).start();
+  }, [activeIndex, pillWidth, capsuleX]);
 
   const go = useCallback((path: string) => {
     if (!loadedOnce.current) {
@@ -225,6 +239,8 @@ export default function Portal() {
   }
 
   const tab = activeTab(shell.path);
+  const tabIndex = tab === 'more' ? TABS.length : TABS.findIndex((t) => t.key === tab);
+  const tabWidth = pillWidth > 0 ? (pillWidth - PILL_PAD * 2) / (TABS.length + 1) : 0;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top, paddingBottom: keyboard }}>
@@ -270,9 +286,18 @@ export default function Portal() {
 
       {tabBar ? (
         <View style={[styles.pillShadow, { bottom: pillBottom }]} pointerEvents="box-none">
-          <View style={styles.pill}>
+          <View style={styles.pill} onLayout={(e) => setPillWidth(e.nativeEvent.layout.width)}>
             {Platform.OS === 'ios' ? (
               <BlurView tint="systemChromeMaterialLight" intensity={90} style={StyleSheet.absoluteFill} />
+            ) : null}
+            {pillWidth > 0 && tabIndex >= 0 ? (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.capsule,
+                  { left: PILL_PAD + 3, width: tabWidth - 6, transform: [{ translateX: capsuleX }] },
+                ]}
+              />
             ) : null}
             {TABS.map((t) => (
               <TabButton
@@ -361,7 +386,7 @@ function TabButton({
       accessibilityRole="tab"
       accessibilityState={{ selected: active }}
       accessibilityLabel={title}>
-      <View style={[styles.tabInner, active && styles.tabActive]}>
+      <View style={styles.tabInner}>
         <Ionicons name={filled} size={21} color={active ? colors.primary : colors.muted} />
         <Text numberOfLines={1} style={[styles.tabText, { color: active ? colors.primary : colors.muted, fontWeight: active ? '700' : '500' }]}>{title}</Text>
       </View>
@@ -391,7 +416,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: PILL_PAD,
     borderRadius: PILL_HEIGHT / 2,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
@@ -399,8 +424,16 @@ const styles = StyleSheet.create({
     backgroundColor: Platform.OS === 'ios' ? 'rgba(255,255,255,0.35)' : 'transparent',
   },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' },
-  tabInner: { alignItems: 'center', justifyContent: 'center', gap: 1, paddingVertical: 6, paddingHorizontal: 4, borderRadius: 22, alignSelf: 'stretch', marginHorizontal: 2 },
-  tabActive: { backgroundColor: 'rgba(28,37,64,0.08)' },
+  tabInner: { alignItems: 'center', justifyContent: 'center', gap: 1 },
+  // Soft, fully rounded capsule behind the selected tab (no hard box edges).
+  capsule: {
+    position: 'absolute',
+    left: 0,
+    top: 5,
+    bottom: 5,
+    borderRadius: 999,
+    backgroundColor: Platform.OS === 'ios' ? 'rgba(28,37,64,0.10)' : 'rgba(28,37,64,0.08)',
+  },
   tabText: { fontSize: 10.5 },
   progress: { position: 'absolute', left: 0, height: 2, backgroundColor: colors.accent, zIndex: 10 },
   banner: { position: 'absolute', left: 0, right: 0, backgroundColor: colors.amber, paddingVertical: 4 },

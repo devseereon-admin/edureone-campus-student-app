@@ -12,6 +12,7 @@
  *   - sends links to other sites to the system browser
  *   - lets the shell navigate the portal without reloading it
  *   - hides the portal's own mobile bottom bar (the native tab bar replaces it)
+ *   - closes the side menu after a page is picked, plus small phone styling
  *
  * It never changes what the portal does in a normal browser.
  */
@@ -69,7 +70,25 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
     "html.in-edureone-app main{padding-bottom:calc(var(--edureone-tabbar,0px) + 12px)!important}" +
     "html.in-edureone-app body{-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}" +
     // Student & parent app: the staff "User login" link stays on the website only.
-    "html.in-edureone-app a[href='/login']{display:none!important}";
+    "html.in-edureone-app a[href='/login']{display:none!important}" +
+    // Academic year picker: a clean pill without the dropdown arrow.
+    "html.in-edureone-app .app-topbar button[role=combobox]>svg:last-child{display:none!important}" +
+    // Stat cards: text takes the free space, the icon stays a fixed square at
+    // the top right, and long amounts wrap instead of pushing the icon down.
+    "html.in-edureone-app .rounded-xl .flex.justify-between>div:first-child:not(:only-child){min-width:0;flex:1 1 auto}" +
+    "html.in-edureone-app .rounded-xl .flex.justify-between>div.rounded-lg.justify-center:last-child{flex:0 0 auto;align-self:flex-start;margin-left:.75rem}" +
+    "html.in-edureone-app .rounded-xl .flex.justify-between>div:first-child .text-2xl{font-size:1.375rem;line-height:1.2;overflow-wrap:anywhere}" +
+    // Soft translucent ("glass") surfaces over a gentle tinted background.
+    "html.in-edureone-app body{background:radial-gradient(120% 60% at 0% 0%,oklch(0.95 0.035 250) 0%,transparent 60%)," +
+      "radial-gradient(90% 50% at 100% 30%,oklch(0.96 0.03 200) 0%,transparent 60%),var(--background);background-attachment:fixed}" +
+    "html.in-edureone-app .min-h-screen.bg-background,html.in-edureone-app .min-h-svh.bg-background{background:transparent!important}" +
+    "html.in-edureone-app .app-topbar{background:color-mix(in oklch,var(--background) 62%,transparent)!important;" +
+      "-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border-bottom-color:rgba(28,37,64,.06)!important}" +
+    "html.in-edureone-app main .rounded-xl.border{background:color-mix(in oklch,var(--card) 72%,transparent)!important;" +
+      "-webkit-backdrop-filter:blur(16px) saturate(170%);backdrop-filter:blur(16px) saturate(170%);" +
+      "border-color:rgba(255,255,255,.7)!important;border-radius:1.1rem!important;box-shadow:0 1px 2px rgba(28,37,64,.04),0 8px 24px -12px rgba(28,37,64,.14)!important}" +
+    "html.in-edureone-app main .rounded-xl.border .rounded-xl.border{background:color-mix(in oklch,var(--card) 55%,transparent)!important;box-shadow:none!important;-webkit-backdrop-filter:none;backdrop-filter:none}" +
+    "html.in-edureone-app .dark main .rounded-xl.border,html.dark.in-edureone-app main .rounded-xl.border{border-color:rgba(255,255,255,.08)!important}";
   var addStyle = function () {
     if (!document.head || document.getElementById("edureone-shell-css")) return;
     var s = document.createElement("style");
@@ -81,6 +100,21 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
   addStyle();
   document.addEventListener("DOMContentLoaded", addStyle);
 
+  /* ---- side menu: close it once a page is picked ---- */
+  // The portal's phone menu stays open after a link is tapped. Its own (hidden)
+  // close button shuts it the same way the X would.
+  var closeMenu = function () {
+    var menu = document.querySelector(".app-mobile-sidebar[data-state=open]");
+    if (!menu) return;
+    var btn = menu.querySelector(":scope > button");
+    if (btn) { btn.click(); return; }
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  };
+  document.addEventListener("click", function (ev) {
+    var a = ev.target && ev.target.closest && ev.target.closest(".app-mobile-sidebar a[href]");
+    if (a && a.pathname === location.pathname) setTimeout(closeMenu, 0);
+  });
+
   /* ---- route changes ---- */
   var lastPath = null;
   var reportRoute = function () {
@@ -89,6 +123,7 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
     if (p === "/login") { location.replace("/login/student"); return; }
     if (p === lastPath) return;
     lastPath = p;
+    closeMenu();
     post({ type: "route", path: p, title: document.title });
   };
   ["pushState", "replaceState"].forEach(function (fn) {
