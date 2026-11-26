@@ -363,6 +363,20 @@ jobs:
             -destination "generic/platform=iOS" -archivePath "$RUNNER_TEMP/App.xcarchive" \
             "${AUTH[@]}" "${SIGN[@]}" archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { xcbfail; exit 1; }
           tail -n 20 "$RUNNER_TEMP/xcodebuild.log"
+          if [ "$SIGN_MODE" = "api" ]; then
+            # An unsigned archive carries no entitlements, and the export copies
+            # entitlements from the archived app's signature. Give it a temporary
+            # (ad-hoc) signature holding the app's entitlements with production push;
+            # the export then re-signs everything for the App Store.
+            APP=$(ls -d "$RUNNER_TEMP"/App.xcarchive/Products/Applications/*.app)
+            ENT_SRC=$(ls EdureoneCampus/*.entitlements 2>/dev/null | head -1 || true)
+            if [ -n "$ENT_SRC" ]; then cp "$ENT_SRC" "$RUNNER_TEMP/app.entitlements"; else plutil -create xml1 "$RUNNER_TEMP/app.entitlements"; fi
+            /usr/libexec/PlistBuddy -c "Delete :aps-environment" "$RUNNER_TEMP/app.entitlements" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$RUNNER_TEMP/app.entitlements"
+            find "$APP" -depth \( -name "*.framework" -o -name "*.dylib" -o -name "*.appex" \) -print0 | while IFS= read -r -d '' f; do codesign --force --sign - "$f"; done
+            codesign --force --sign - --entitlements "$RUNNER_TEMP/app.entitlements" "$APP"
+            codesign -d --entitlements :- "$APP" 2>/dev/null | grep -A1 aps-environment
+          fi
           write_opts() {
             cat > "$RUNNER_TEMP/ExportOptions-$1.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
