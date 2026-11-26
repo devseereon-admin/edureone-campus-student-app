@@ -30,12 +30,14 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: BUNDLE_ID,
     buildNumber: String(BUILD),
-    supportsTablet: true,
+    // iPhone only: avoids the iPad screenshot + iPad layout review requirements.
+    supportsTablet: false,
     deploymentTarget: '16.4',
     config: { usesNonExemptEncryption: false },
     infoPlist: {
       NSFaceIDUsageDescription: 'Use Face ID to unlock Edureone Campus quickly and keep your student data private.',
       NSCameraUsageDescription: 'Edureone Campus uses the camera when you attach a photo to an assignment.',
+      NSMicrophoneUsageDescription: 'Edureone Campus uses the microphone only if you record a video to attach to an assignment.',
       NSPhotoLibraryUsageDescription: 'Edureone Campus needs your photo library so you can attach images to assignments.',
       UIBackgroundModes: ['remote-notification'],
     },
@@ -98,8 +100,12 @@ const config: ExpoConfig = {
       'expo-build-properties',
       {
         android: { usesCleartextTraffic: false },
+        // React Native Firebase (iOS push token) needs static frameworks.
+        ios: { useFrameworks: 'static', forceStaticLinking: ['RNFBApp', 'RNFBMessaging'] },
       },
     ],
+    // Firebase on iOS only, when GoogleService-Info.plist is provided (CI secret).
+    './plugins/with-ios-firebase',
   ],
   experiments: { typedRoutes: true, reactCompiler: true },
   extra: {

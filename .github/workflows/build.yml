@@ -224,6 +224,22 @@ jobs:
           xcodebuild -version
       - run: npm ci
 
+      - name: Firebase config (iOS push)
+        env:
+          GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}
+        run: |
+          if [ -n "$GOOGLE_SERVICE_INFO_PLIST" ]; then
+            printf '%s' "$GOOGLE_SERVICE_INFO_PLIST" > GoogleService-Info.plist
+            plutil -lint GoogleService-Info.plist
+            /usr/libexec/PlistBuddy -c "Print :BUNDLE_ID" GoogleService-Info.plist
+            echo "GOOGLE_SERVICES_PLIST_FILE=./GoogleService-Info.plist" >> "$GITHUB_ENV"
+          elif [ "$STORE_BUILD" = "true" ]; then
+            echo "::error::Secret GOOGLE_SERVICE_INFO_PLIST is missing: an App Store build without it gets no push notifications."
+            exit 1
+          else
+            echo "::notice::GOOGLE_SERVICE_INFO_PLIST not set: building iOS without push."
+          fi
+
       - name: Generate native project + CocoaPods
         run: |
           npx expo prebuild --platform ios --no-install --clean

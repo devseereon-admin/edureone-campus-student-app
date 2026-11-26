@@ -1,5 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import NetInfo from '@react-native-community/netinfo';
+import { BlurView } from 'expo-blur';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
@@ -32,6 +33,11 @@ const WEB_ORIGIN = (() => {
 })();
 
 const INJECTED = injectedBeforeLoad(WEB_ORIGIN);
+
+const PILL_HEIGHT = 62;
+/** Tells the portal how much room to leave under its pages for the tab bar. */
+const reserveScript = (px: number) =>
+  `document.documentElement.style.setProperty('--edureone-tabbar', '${Math.round(px)}px'); true;`;
 
 const safeName = (name: string) => name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'download';
 
@@ -79,6 +85,16 @@ export default function Portal() {
   const pendingPath = useRef<string | null>(null);
   const loadedOnce = useRef(false);
   const [loaded, setLoaded] = useState(false);
+
+  const tabBar = Boolean(shell.user && showsTabBar(shell.path) && keyboard === 0);
+  const pillBottom = Math.max(insets.bottom, 12);
+  // Room the portal leaves under its pages for the floating tab bar.
+  const reserve = tabBar ? PILL_HEIGHT + pillBottom + 8 : 0;
+  const reserveRef = useRef(reserve);
+  useEffect(() => {
+    reserveRef.current = reserve;
+    if (loaded) web.current?.injectJavaScript(reserveScript(reserve));
+  }, [reserve, loaded]);
 
   const go = useCallback((path: string) => {
     if (!loadedOnce.current) {
@@ -188,6 +204,7 @@ export default function Portal() {
 
   const onLoadEnd = useCallback(() => {
     setLoading(false);
+    web.current?.injectJavaScript(reserveScript(reserveRef.current));
     if (!loadedOnce.current) {
       loadedOnce.current = true;
       setLoaded(true);
@@ -208,7 +225,6 @@ export default function Portal() {
   }
 
   const tab = activeTab(shell.path);
-  const tabBar = shell.user && showsTabBar(shell.path) && keyboard === 0;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top, paddingBottom: keyboard }}>
@@ -253,28 +269,33 @@ export default function Portal() {
       />
 
       {tabBar ? (
-        <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 6) }]}>
-          {TABS.map((t) => (
+        <View style={[styles.pillShadow, { bottom: pillBottom }]} pointerEvents="box-none">
+          <View style={styles.pill}>
+            {Platform.OS === 'ios' ? (
+              <BlurView tint="systemChromeMaterialLight" intensity={90} style={StyleSheet.absoluteFill} />
+            ) : null}
+            {TABS.map((t) => (
+              <TabButton
+                key={t.key}
+                icon={t.icon}
+                title={t.title}
+                active={tab === t.key}
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => null);
+                  go(t.path);
+                }}
+              />
+            ))}
             <TabButton
-              key={t.key}
-              icon={t.icon}
-              title={t.title}
-              active={tab === t.key}
+              icon="grid-outline"
+              title="More"
+              active={tab === 'more'}
               onPress={() => {
                 Haptics.selectionAsync().catch(() => null);
-                go(t.path);
+                router.push('/more');
               }}
             />
-          ))}
-          <TabButton
-            icon="grid-outline"
-            title="More"
-            active={tab === 'more'}
-            onPress={() => {
-              Haptics.selectionAsync().catch(() => null);
-              router.push('/more');
-            }}
-          />
+          </View>
         </View>
       ) : (
         <View style={{ height: keyboard ? 0 : insets.bottom, backgroundColor: '#fff' }} />
@@ -334,9 +355,16 @@ function TabButton({
 }) {
   const filled = (active ? String(icon).replace('-outline', '') : icon) as React.ComponentProps<typeof Ionicons>['name'];
   return (
-    <Pressable onPress={onPress} style={styles.tab} accessibilityRole="tab" accessibilityState={{ selected: active }} accessibilityLabel={title}>
-      <Ionicons name={filled} size={22} color={active ? colors.primary : colors.muted} />
-      <Text style={[styles.tabText, { color: active ? colors.primary : colors.muted, fontWeight: active ? '700' : '500' }]}>{title}</Text>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.tab, pressed && { transform: [{ scale: 0.94 }] }]}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={title}>
+      <View style={[styles.tabInner, active && styles.tabActive]}>
+        <Ionicons name={filled} size={21} color={active ? colors.primary : colors.muted} />
+        <Text numberOfLines={1} style={[styles.tabText, { color: active ? colors.primary : colors.muted, fontWeight: active ? '700' : '500' }]}>{title}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -345,15 +373,35 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: '#fff', gap: 8 },
   title: { fontSize: 18, fontWeight: '700', color: colors.text, textAlign: 'center', marginTop: 8 },
   body: { fontSize: 14, color: colors.muted, textAlign: 'center' },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    paddingTop: 6,
+  // Floating pill tab bar: frosted glass on iOS, translucent white on Android.
+  pillShadow: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    height: PILL_HEIGHT,
+    borderRadius: PILL_HEIGHT / 2,
+    shadowColor: '#0B1024',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 10,
+    backgroundColor: Platform.OS === 'ios' ? 'transparent' : 'rgba(255,255,255,0.94)',
   },
-  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, paddingVertical: 2 },
-  tabText: { fontSize: 11 },
+  pill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    borderRadius: PILL_HEIGHT / 2,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(28,37,64,0.10)',
+    backgroundColor: Platform.OS === 'ios' ? 'rgba(255,255,255,0.35)' : 'transparent',
+  },
+  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' },
+  tabInner: { alignItems: 'center', justifyContent: 'center', gap: 1, paddingVertical: 6, paddingHorizontal: 4, borderRadius: 22, alignSelf: 'stretch', marginHorizontal: 2 },
+  tabActive: { backgroundColor: 'rgba(28,37,64,0.08)' },
+  tabText: { fontSize: 10.5 },
   progress: { position: 'absolute', left: 0, height: 2, backgroundColor: colors.accent, zIndex: 10 },
   banner: { position: 'absolute', left: 0, right: 0, backgroundColor: colors.amber, paddingVertical: 4 },
   bannerText: { color: '#fff', textAlign: 'center', fontWeight: '600', fontSize: 12 },

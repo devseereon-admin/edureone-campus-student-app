@@ -8,14 +8,16 @@ import { KEYS, getItem, removeItem, setItem } from './storage';
 /**
  * Push notifications.
  *
- * The backend sends pushes through Firebase Cloud Messaging (HTTP v1) to the
- * tokens saved by POST /devices/register (same contract as the Capacitor app).
- *  - Android: getDevicePushTokenAsync() returns the FCM registration token
- *    when google-services.json is bundled (GOOGLE_SERVICES_JSON secret in CI).
- *  - iOS: the native token is an APNs token, which FCM cannot address
- *    directly. The app still asks permission and listens for notifications;
- *    register iOS once the backend can send to APNs (see README "Push").
- * Payloads may carry data.url (e.g. "/student/notices"); tapping opens that page.
+ * The backend sends every push through Firebase Cloud Messaging (HTTP v1) to
+ * the tokens saved by POST /devices/register (same contract as the Capacitor
+ * app):
+ *  - Android: expo-notifications returns the FCM token (google-services.json,
+ *    GOOGLE_SERVICES_JSON secret in CI).
+ *  - iOS: React Native Firebase turns the APNs registration into an FCM token
+ *    (GoogleService-Info.plist, GOOGLE_SERVICE_INFO_PLIST secret in CI; the
+ *    APNs key must be uploaded in Firebase > Cloud Messaging).
+ * expo-notifications shows the notifications and handles taps on both.
+ * Payloads may carry data.route / data.url (e.g. "/student/notices").
  */
 export const CHANNEL_ID = 'edureon_default';
 
@@ -131,6 +133,18 @@ async function callDevices(path: string, session: WebSession, body?: Record<stri
  * signed in to the portal (same POST /devices/register contract the portal's
  * Capacitor build uses). Safe to call repeatedly.
  */
+/** FCM registration token for this phone. */
+async function fcmToken(): Promise<string> {
+  if (Platform.OS === 'android') return String((await Notifications.getDevicePushTokenAsync()).data || '');
+  // iOS: loaded lazily so Android (which has no React Native Firebase native
+  // module) never touches it. Throws if the build has no GoogleService-Info.plist.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const m = require('@react-native-firebase/messaging') as typeof import('@react-native-firebase/messaging');
+  const messaging = m.getMessaging();
+  if (!m.isDeviceRegisteredForRemoteMessages(messaging)) await m.registerDeviceForRemoteMessages(messaging);
+  return String((await m.getToken(messaging)) || '');
+}
+
 export async function registerForPush(session: WebSession): Promise<void> {
   if (!Device.isDevice) return setStatus({ state: 'unsupported', reason: 'emulator' });
   setStatus({ state: 'working' });
@@ -140,17 +154,16 @@ export async function registerForPush(session: WebSession): Promise<void> {
     let granted = current.granted;
     if (!granted && current.canAskAgain) granted = (await Notifications.requestPermissionsAsync()).granted;
     if (!granted) return setStatus({ state: 'denied' });
-    if (Platform.OS !== 'android') return setStatus({ state: 'unsupported', reason: 'iOS push is not set up yet' });
     let value = '';
     try {
-      value = String((await Notifications.getDevicePushTokenAsync()).data || '');
+      value = await fcmToken();
     } catch (e) {
       return setStatus({ state: 'failed', reason: `Firebase: ${String((e as Error)?.message || e)}` });
     }
     if (value.length < 10) return setStatus({ state: 'failed', reason: 'Firebase gave no token' });
     await callDevices('/devices/register', session, {
       token: value,
-      platform: 'android',
+      platform: Platform.OS === 'ios' ? 'ios' : 'android',
       device_id: await deviceId(),
       app_version: APP_VERSION,
     });

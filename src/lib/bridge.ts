@@ -60,7 +60,13 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
   };
 
   /* ---- look: the native tab bar replaces the portal's mobile bottom bar ---- */
+  // The app already keeps the portal below the status bar, so the portal's own
+  // safe-area padding would add a second, empty strip at the top. Pages also
+  // leave room at the bottom for the floating tab bar (--edureone-tabbar).
   var css = ".app-bottom-nav{display:none!important}" +
+    "html.in-edureone-app .app-topbar{padding-top:0!important;height:3.5rem!important}" +
+    "html.in-edureone-app .app-mobile-sidebar{padding-top:0!important;padding-bottom:0!important}" +
+    "html.in-edureone-app main{padding-bottom:calc(var(--edureone-tabbar,0px) + 12px)!important}" +
     "html.in-edureone-app body{-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}";
   var addStyle = function () {
     if (!document.head || document.getElementById("edureone-shell-css")) return;
