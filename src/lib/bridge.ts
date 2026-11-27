@@ -76,7 +76,9 @@ export const injectedBeforeLoad = (portalOrigin: string) => `(function () {
     // Stat cards: text takes the free space, the icon stays a fixed square at
     // the top right, and long amounts wrap instead of pushing the icon down.
     "html.in-edureone-app .rounded-xl .flex.justify-between>div:first-child:not(:only-child){min-width:0;flex:1 1 auto}" +
-    "html.in-edureone-app .rounded-xl .flex.justify-between>div.rounded-lg.justify-center:last-child{flex:0 0 auto;align-self:flex-start;margin-left:.75rem}" +
+    "html.in-edureone-app .rounded-xl .flex.justify-between:has(>div.rounded-lg.justify-center:last-child){flex-wrap:nowrap!important}" +
+    "html.in-edureone-app .rounded-xl>.p-5:has(>.flex.justify-between>div.rounded-lg.justify-center:last-child){padding:1rem!important}" +
+    "html.in-edureone-app .rounded-xl .flex.justify-between>div.rounded-lg.justify-center:last-child{flex:0 0 auto;align-self:flex-start;margin-left:.625rem}" +
     "html.in-edureone-app .rounded-xl .flex.justify-between>div:first-child .text-2xl{font-size:1.375rem;line-height:1.2;overflow-wrap:anywhere}" +
     // Soft translucent ("glass") surfaces over a gentle tinted background.
     "html.in-edureone-app body{background:radial-gradient(120% 60% at 0% 0%,oklch(0.95 0.035 250) 0%,transparent 60%)," +
